@@ -1259,7 +1259,11 @@ with tabs[4]:
                     else "Not disclosed"
                 ),
                 "Posted": (item.get("posted_at") or "")[:10] or "Unknown",
-                "Proposals": item.get("proposal_count") if item.get("proposal_count") is not None else "Unknown",
+                "Proposals": (
+                    str(item.get("proposal_count"))
+                    if item.get("proposal_count") is not None
+                    else "Unknown"
+                ),
                 "Status": item.get("project_status", ""),
                 "Match score": item.get("match_score", 0),
                 "Last checked": (item.get("last_checked_at") or "")[:16],
