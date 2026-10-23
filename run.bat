@@ -29,6 +29,6 @@ if errorlevel 1 (
     )
 )
 
-echo Starting MindSmiths Lead Intelligence...
+echo Starting MindSmiths Sales Intelligence Platform...
 ".venv\Scripts\python.exe" -m streamlit run app.py --server.gatherUsageStats false
 pause

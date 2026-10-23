@@ -153,6 +153,27 @@ class Business:
     excluded: bool = False
     socials: list[SocialProfile] = field(default_factory=list)
 
+    # Business-size and website-audit evidence (unknown = None, never zero).
+    number_of_locations: int | None = None
+    catalogue_size: int | None = None
+    product_price_min: float | None = None
+    product_price_max: float | None = None
+    services_summary: str = ""
+    has_booking: bool | None = None
+    has_enquiry: bool | None = None
+    promotes_services: bool | None = None
+    expansion_signal: bool | None = None
+    established_signal: bool | None = None
+    website_response_ms: int | None = None
+    website_page_bytes: int | None = None
+    has_cta: bool | None = None
+
+    # Explicit revenue disclosures (must always be sourced by the user).
+    verified_revenue: float | None = None
+    verified_revenue_source: str = ""
+    third_party_revenue: float | None = None
+    third_party_revenue_source: str = ""
+
     def finalize(self) -> "Business":
         self.name = clean_text(self.name)
         self.category = clean_text(self.category)

@@ -78,6 +78,13 @@ def enrich_business(business: Business, settings: Settings, *, delay: bool = Tru
     business.website_final_url = check.final_url
     business.website_title = check.title
     business.website_issues = list(check.issues)
+    business.website_response_ms = check.response_time_ms
+    business.website_page_bytes = check.page_size_bytes
+    business.has_cta = check.has_cta
+    if check.has_enquiry_form:
+        business.has_enquiry = True
+    if check.has_booking_hint:
+        business.has_booking = True
 
     if check.status != WEBSITE_REACHABLE or not check.html:
         if check.status == WEBSITE_CHECK_FAILED and not business.website_issues:

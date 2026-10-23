@@ -1,14 +1,15 @@
 """End-to-end search pipeline with progress, safe concurrency and persistence."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 
-from config import ScoringRules, Settings
+from config import OpportunityRules, ScoringRules, Settings
 from .db import Database
 from .discovery import (
     BaseProvider,
@@ -19,6 +20,8 @@ from .discovery import (
 )
 from .enrichment import enrich_business
 from .models import Business, SocialProfile
+from .opportunity import score_opportunity
+from .revenue import assess_revenue
 from .scoring import score_business
 
 log = logging.getLogger(__name__)
@@ -63,6 +66,91 @@ def provider_limitations(provider: str, params: SearchParams) -> list[str]:
     if params.max_results >= 200:
         notes.append("A 200-result cap is enforced to protect public data sources.")
     return notes
+
+
+def refresh_intelligence(
+    db: Database,
+    record: dict[str, Any],
+    *,
+    opportunity_rules: OpportunityRules | None = None,
+) -> tuple[Any, Any]:
+    """Recompute revenue and website-opportunity intelligence for one record."""
+    rules = opportunity_rules or OpportunityRules()
+    evidence = db.evidence_for(int(record["id"]))
+    revenue = assess_revenue(record, rules=rules, evidence_records=evidence)
+    opportunity = score_opportunity(record, rules=rules, revenue=revenue)
+    db.update_revenue(
+        int(record["id"]),
+        category=revenue.category,
+        band=revenue.band,
+        confidence=revenue.confidence,
+        assessment_json=json.dumps(revenue.to_dict(), ensure_ascii=False, default=str),
+    )
+    db.update_opportunity(
+        int(record["id"]),
+        score=opportunity.score,
+        classification=opportunity.classification,
+        budget_fit=opportunity.budget_fit,
+        confidence=opportunity.confidence,
+        notes=opportunity.why,
+    )
+    return revenue, opportunity
+
+
+def record_business_evidence(db: Database, business_id: int, record: dict[str, Any]) -> None:
+    """Persist source/verification state for important fields without fabricating certainty."""
+    website = (record.get("website") or "").strip()
+    status = record.get("website_status") or "Unknown"
+    if website:
+        db.record_evidence(
+            business_id, "website", website, source_url=website,
+            state="verified" if status == "Website reachable" else "unverified",
+            confidence="high" if status == "Website reachable" else "medium",
+            reason=f"Website status: {status}",
+        )
+    else:
+        db.record_evidence(
+            business_id, "website", "Not listed", source_url=record.get("listing_url") or "",
+            state="unavailable", confidence="low",
+            reason="No website URL in collected listings; absence is not independently verified.",
+        )
+    for field_name, source_key in (("phone", "phone_source"), ("email", "email_source")):
+        value = (record.get(field_name) or "").strip()
+        if not value:
+            continue
+        source = (record.get(source_key) or "").strip()
+        db.record_evidence(
+            business_id, field_name, value,
+            source_url=record.get("website") if source == "website" else (record.get("listing_url") or ""),
+            state="verified" if source == "website" else "unverified",
+            confidence="high" if source == "website" else "medium",
+            reason=f"Publicly listed source: {source or 'unknown'}",
+        )
+    if record.get("rating") is not None or record.get("review_count") is not None:
+        db.record_evidence(
+            business_id, "rating_reviews",
+            f"{record.get('rating')} / {record.get('review_count')}",
+            source_url=record.get("listing_url") or "",
+            state="unverified", confidence="medium",
+            reason="Public listing rating/review count; verify on the source.",
+        )
+    for social in record.get("socials") or []:
+        confidence = float(social.get("confidence") or 0)
+        db.record_evidence(
+            business_id, f"social:{social.get('platform')}", social.get("url", ""),
+            source_url=social.get("url", ""),
+            state="verified" if confidence >= 0.85 else "unverified",
+            confidence="high" if confidence >= 0.85 else "medium",
+            reason=f"Match confidence {confidence:.2f}; source {social.get('source') or 'unknown'}",
+        )
+    if record.get("has_booking") is not None or record.get("has_enquiry") is not None:
+        db.record_evidence(
+            business_id, "booking_enquiry",
+            f"booking={record.get('has_booking')} enquiry={record.get('has_enquiry')}",
+            source_url=website,
+            state="verified", confidence="medium",
+            reason="Detected in a lightweight automated website check.",
+        )
 
 
 def run_search(
@@ -145,6 +233,8 @@ def run_search(
             if saved is not None:
                 result = score_business(saved, rules)
                 db.update_score(business_id, result.score, result.priority, result.notes)
+                record_business_evidence(db, business_id, saved)
+                refresh_intelligence(db, saved, opportunity_rules=settings.load_opportunity_rules())
         except Exception as exc:
             report.failed += 1
             report.errors.append(f"{business.name}: database error ({type(exc).__name__})")
@@ -165,11 +255,19 @@ def run_search(
     return report
 
 
-def rescore_all(db: Database, rules: ScoringRules) -> int:
+def rescore_all(
+    db: Database,
+    rules: ScoringRules,
+    *,
+    opportunity_rules: OpportunityRules | None = None,
+) -> int:
     count = 0
+    opportunity_rules = opportunity_rules or OpportunityRules()
     for record in db.list_businesses(limit=100000, include_excluded=True):
         result = score_business(record, rules)
         db.update_score(record["id"], result.score, result.priority, result.notes)
+        record_business_evidence(db, int(record["id"]), record)
+        refresh_intelligence(db, record, opportunity_rules=opportunity_rules)
         count += 1
     return count
 
@@ -220,6 +318,23 @@ def _record_to_business(record: dict) -> Business:
         status=record.get("status", "new"),
         excluded=bool(record.get("excluded")),
         socials=socials,
+        number_of_locations=record.get("number_of_locations"),
+        catalogue_size=record.get("catalogue_size"),
+        product_price_min=record.get("product_price_min"),
+        product_price_max=record.get("product_price_max"),
+        services_summary=record.get("services_summary", ""),
+        has_booking=record.get("has_booking"),
+        has_enquiry=record.get("has_enquiry"),
+        promotes_services=record.get("promotes_services"),
+        expansion_signal=record.get("expansion_signal"),
+        established_signal=record.get("established_signal"),
+        website_response_ms=record.get("website_response_ms"),
+        website_page_bytes=record.get("website_page_bytes"),
+        has_cta=record.get("has_cta"),
+        verified_revenue=record.get("verified_revenue"),
+        verified_revenue_source=record.get("verified_revenue_source", ""),
+        third_party_revenue=record.get("third_party_revenue"),
+        third_party_revenue_source=record.get("third_party_revenue_source", ""),
     )
 
 
@@ -249,6 +364,8 @@ def re_enrich_all(
                 if saved is not None:
                     result = score_business(saved, rules)
                     db.update_score(business_id, result.score, result.priority, result.notes)
+                    record_business_evidence(db, business_id, saved)
+                    refresh_intelligence(db, saved, opportunity_rules=settings.load_opportunity_rules())
                     enriched += 1
                 if progress:
                     progress("enrich", index, total, f"Refreshed {index}/{total}: {record.get('name', '')}")

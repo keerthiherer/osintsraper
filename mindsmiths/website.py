@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -37,6 +39,12 @@ class WebsiteCheck:
     html: str = ""
     error: str = ""
     page_text_length: int = 0
+    response_time_ms: int | None = None
+    page_size_bytes: int | None = None
+    has_cta: bool | None = None
+    has_contact_details: bool | None = None
+    has_enquiry_form: bool | None = None
+    has_booking_hint: bool | None = None
 
 
 def build_session() -> requests.Session:
@@ -66,15 +74,37 @@ def parse_page(html: str) -> dict[str, Any]:
     if meta and meta.get("content"):
         description = " ".join(meta["content"].split())
     viewport = soup.find("meta", attrs={"name": "viewport"})
+    has_enquiry_form = soup.find("form") is not None
+    hrefs = " ".join(anchor.get("href", "") for anchor in soup.find_all("a", href=True)).lower()
+    raw_text = " ".join(soup.get_text(" ", strip=True).split())
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     text = " ".join(soup.get_text(" ", strip=True).split())
+    lowered = text.lower()
+    has_cta = bool(re.search(
+        r"\b(contact us|get in touch|book now|enquire|enquiry|get a quote|request a quote|"
+        r"call us|whatsapp|buy now|shop now|send message|schedule|appointment)\b",
+        lowered,
+    ))
+    has_contact_details = bool(
+        re.search(r"mailto:|tel:", hrefs)
+        or re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", raw_text)
+        or re.search(r"(?:\+?\d[\d\s().\-]{7,}\d)", raw_text)
+    )
+    has_booking_hint = bool(re.search(
+        r"\b(book(?:ing)?|reserve|reservation|appointment|schedule a|consultation)\b",
+        lowered,
+    ))
     return {
         "title": title[:300],
         "meta_description": description[:500],
         "has_viewport": viewport is not None,
         "text": text,
         "text_length": len(text),
+        "has_cta": has_cta,
+        "has_contact_details": has_contact_details,
+        "has_enquiry_form": has_enquiry_form,
+        "has_booking_hint": has_booking_hint,
     }
 
 
@@ -101,6 +131,7 @@ def check_website(
         "Accept-Language": "en-IN,en;q=0.8",
     }
     check = WebsiteCheck(status=WEBSITE_CHECK_FAILED, url=normalized, https=parsed.scheme == "https")
+    started = time.monotonic()
     try:
         response = session.get(
             normalized,
@@ -123,6 +154,8 @@ def check_website(
             if total >= MAX_BYTES:
                 break
         response.close()
+        check.response_time_ms = int((time.monotonic() - started) * 1000)
+        check.page_size_bytes = total
         body = b"".join(chunks)
         encoding = response.encoding or response.apparent_encoding or "utf-8"
         try:
@@ -143,6 +176,10 @@ def check_website(
         check.meta_description = page["meta_description"]
         check.has_viewport = page["has_viewport"]
         check.page_text_length = page["text_length"]
+        check.has_cta = page["has_cta"]
+        check.has_contact_details = page["has_contact_details"]
+        check.has_enquiry_form = page["has_enquiry_form"]
+        check.has_booking_hint = page["has_booking_hint"]
 
         if not check.title:
             check.issues.append("Missing page title")

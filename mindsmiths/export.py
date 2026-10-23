@@ -69,6 +69,33 @@ def lead_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "Lead Score": record.get("score", 0),
             "Priority": record.get("priority", ""),
             "Qualification Notes": record.get("qualification_notes", ""),
+            "Website Opportunity Score": record.get("opportunity_score", 0),
+            "Opportunity Class": record.get("opportunity_class", ""),
+            "Opportunity Confidence": record.get("opportunity_confidence", ""),
+            "Budget Fit": record.get("budget_fit", ""),
+            "Revenue Category": record.get("revenue_category", ""),
+            "Business Size Band": record.get("revenue_band", ""),
+            "Revenue Confidence": record.get("revenue_confidence", ""),
+            "Revenue Last Estimated": record.get("revenue_updated_at", ""),
+            "Number of Locations": record.get("number_of_locations", ""),
+            "Catalogue Size": record.get("catalogue_size", ""),
+            "Public Price Min": record.get("product_price_min", ""),
+            "Public Price Max": record.get("product_price_max", ""),
+            "Public Services": record.get("services_summary", ""),
+            "Has Booking": record.get("has_booking", ""),
+            "Has Enquiry": record.get("has_enquiry", ""),
+            "Promotes Services": record.get("promotes_services", ""),
+            "Expansion Signal": record.get("expansion_signal", ""),
+            "Established Signal": record.get("established_signal", ""),
+            "Audit Checked At": record.get("audit_checked_at", ""),
+            "Follow-up Date": record.get("follow_up_date", ""),
+            "Last Contact Date": record.get("last_contact_date", ""),
+            "Lead Source": record.get("lead_source", ""),
+            "Client Budget": record.get("client_budget", ""),
+            "Proposed Quotation": record.get("proposed_quotation", ""),
+            "Actual Quoted Amount": record.get("quoted_amount", ""),
+            "Objections": record.get("objections", ""),
+            "Won/Lost Reason": record.get("won_lost_reason", ""),
             "Sales Status": record.get("status", "new"),
             "User Notes": record.get("notes", ""),
             "Source": record.get("source", ""),
@@ -84,6 +111,44 @@ def to_dataframe(records: list[dict[str, Any]]) -> pd.DataFrame:
 def export_csv(records: list[dict[str, Any]]) -> bytes:
     df = to_dataframe(records)
     return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def freelance_dataframe(records: list[dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for record in records:
+        rows.append({
+            "Title": record.get("title", ""),
+            "Platform": record.get("platform", ""),
+            "URL": record.get("url", ""),
+            "Status": record.get("project_status", ""),
+            "Posted": record.get("posted_at", ""),
+            "Deadline": record.get("deadline", ""),
+            "Budget Min": record.get("budget_min", ""),
+            "Budget Max": record.get("budget_max", ""),
+            "Currency": record.get("currency", ""),
+            "Type": record.get("budget_type", ""),
+            "Skills": record.get("skills", ""),
+            "Proposals": record.get("proposal_count", ""),
+            "Client Info": record.get("client_info", ""),
+            "Match Score": record.get("match_score", 0),
+            "Score Notes": record.get("score_notes", ""),
+            "New": "Yes" if record.get("is_new") else "No",
+            "Last Checked": record.get("last_checked_at", ""),
+            "Source Query": record.get("source_query", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def export_freelance_csv(records: list[dict[str, Any]]) -> bytes:
+    return freelance_dataframe(records).to_csv(index=False).encode("utf-8-sig")
+
+
+def export_freelance_excel(records: list[dict[str, Any]]) -> bytes:
+    frame = freelance_dataframe(records)
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        frame.to_excel(writer, index=False, sheet_name="Freelance")
+    return buffer.getvalue()
 
 
 def export_excel(records: list[dict[str, Any]]) -> bytes:
